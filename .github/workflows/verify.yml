@@ -1,0 +1,102 @@
+name: TeraClaw verify action
+
+# Reusable Level 2 runner. The caller repo supplies the tested SHA, base ref,
+# numeric repository id, pinned runner URL/hash, and the license token secret.
+# Keep this file short: all logic lives in the signed runner it downloads and
+# hash-checks.
+#
+# The OIDC certificate's job_workflow_ref is this repo at the pinned tag, and
+# job_workflow_sha is this workflow commit. Receipt verification pins both, the
+# numeric repository id, and the tested commit.
+
+on:
+  workflow_call:
+    inputs:
+      head_sha:
+        required: true
+        type: string
+      base_ref:
+        required: true
+        type: string
+      base_sha:
+        required: false
+        type: string
+        default: ""
+      scope:
+        required: true
+        type: string
+      repository_id:
+        required: true
+        type: number
+      runner_url:
+        required: true
+        type: string
+      runner_sha256:
+        required: true
+        type: string
+      workflow_tag:
+        required: true
+        type: string
+    secrets:
+      TERACLAW_LICENSE_TOKEN:
+        required: true
+
+permissions:
+  contents: read
+  checks: write
+  id-token: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      HEAD_SHA: ${{ inputs.head_sha }}
+      BASE_REF: ${{ inputs.base_ref }}
+      BASE_SHA: ${{ inputs.base_sha }}
+      SCOPE: ${{ inputs.scope }}
+      REPOSITORY_ID: ${{ inputs.repository_id }}
+      RUNNER_URL: ${{ inputs.runner_url }}
+      RUNNER_SHA256: ${{ inputs.runner_sha256 }}
+      WORKFLOW_TAG: ${{ inputs.workflow_tag }}
+      LICENSE_TOKEN: ${{ secrets.TERACLAW_LICENSE_TOKEN }}
+    steps:
+      - name: Require license
+        if: env.LICENSE_TOKEN == ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          jq -n --arg sha "$HEAD_SHA" \
+            '{name:"TeraClaw merge queue",head_sha:$sha,status:"completed",conclusion:"action_required",output:{title:"TeraClaw merge queue",summary:"TeraClaw license invalid or missing"}}' \
+            | gh api "repos/$REPO/check-runs" --method POST --input -
+
+      - name: Check out the code under test
+        if: env.LICENSE_TOKEN != ''
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ env.HEAD_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download and hash-check the runner
+        if: env.LICENSE_TOKEN != ''
+        run: |
+          curl -fsSL "$RUNNER_URL" -o runner.tar.gz
+          echo "$RUNNER_SHA256  runner.tar.gz" | sha256sum -c -
+          mkdir runner
+          tar -xzf runner.tar.gz -C runner
+
+      - name: Run the verifier
+        if: env.LICENSE_TOKEN != ''
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          ./runner/teraclaw-verify \
+            --head-sha "$HEAD_SHA" \
+            --base-ref "$BASE_REF" \
+            --base-sha "$BASE_SHA" \
+            --scope "$SCOPE" \
+            --repository-id "$REPOSITORY_ID" \
+            --workflow-tag "$WORKFLOW_TAG" \
+            --license-token "$LICENSE_TOKEN"
