@@ -70,6 +70,9 @@ jobs:
           jq -n --arg sha "$HEAD_SHA" \
             '{name:"TeraClaw merge queue",head_sha:$sha,status:"completed",conclusion:"action_required",output:{title:"TeraClaw merge queue",summary:"TeraClaw license invalid or missing"}}' \
             | gh api "repos/$REPO/check-runs" --method POST --input -
+          # Posting the check is not enough: a green job would let the merge
+          # queue treat a missing license as a pass (R-06).
+          exit 1
 
       - name: Check out the code under test
         if: env.LICENSE_TOKEN != ''
