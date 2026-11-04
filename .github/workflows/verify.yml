@@ -34,6 +34,22 @@ on:
       runner_sha256:
         required: true
         type: string
+      runner_bundle_url:
+        required: true
+        type: string
+      runner_source_commit:
+        required: true
+        type: string
+      runner_signer_workflow:
+        required: true
+        type: string
+      runner_source_repository_id:
+        required: true
+        type: number
+      runner_source_repository:
+        required: false
+        type: string
+        default: "quantumlabssh/teraclaw"
       workflow_tag:
         required: true
         type: string
@@ -58,6 +74,11 @@ jobs:
       REPOSITORY_ID: ${{ inputs.repository_id }}
       RUNNER_URL: ${{ inputs.runner_url }}
       RUNNER_SHA256: ${{ inputs.runner_sha256 }}
+      RUNNER_BUNDLE_URL: ${{ inputs.runner_bundle_url }}
+      RUNNER_SOURCE_COMMIT: ${{ inputs.runner_source_commit }}
+      RUNNER_SIGNER_WORKFLOW: ${{ inputs.runner_signer_workflow }}
+      RUNNER_SOURCE_REPOSITORY_ID: ${{ inputs.runner_source_repository_id }}
+      RUNNER_SOURCE_REPOSITORY: ${{ inputs.runner_source_repository }}
       WORKFLOW_TAG: ${{ inputs.workflow_tag }}
       LICENSE_TOKEN: ${{ secrets.TERACLAW_LICENSE_TOKEN }}
     steps:
@@ -82,11 +103,21 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Download and hash-check the runner
+      - name: Download, hash-check, and verify the runner
         if: env.LICENSE_TOKEN != ''
         run: |
           curl -fsSL "$RUNNER_URL" -o runner.tar.gz
           echo "$RUNNER_SHA256  runner.tar.gz" | sha256sum -c -
+          curl -fsSL "$RUNNER_BUNDLE_URL" -o runner.sigstore.json
+          python -m pip install --quiet 'sigstore==4.5.1'
+          python verify_runner_bundle.py \
+            --file runner.tar.gz \
+            --bundle runner.sigstore.json \
+            --expected-sha256 "$RUNNER_SHA256" \
+            --signer-workflow "$RUNNER_SIGNER_WORKFLOW" \
+            --source-commit "$RUNNER_SOURCE_COMMIT" \
+            --source-repository-id "$RUNNER_SOURCE_REPOSITORY_ID" \
+            --source-repository "$RUNNER_SOURCE_REPOSITORY"
           mkdir runner
           tar -xzf runner.tar.gz -C runner
 
