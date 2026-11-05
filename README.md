@@ -2,11 +2,11 @@
 
 Public reusable Level 2 runner for TeraClaw merge-queue receipts.
 
-This repository is intentionally small. The caller supplies a signed,
-version-pinned runner tarball URL, SHA-256, Sigstore bundle URL, and a
-`license:ci` dashboard key. Each run exchanges the key for a fresh signed v2 CI
-license, verifies the runner bundle, runs the verifier, and posts a GitHub
-check run from the signed receipt.
+This repository is intentionally small. The caller supplies the pinned runner
+SHA-256, architecture, signer identity, download host, and a `license:ci`
+dashboard key. Each run exchanges the key for a fresh signed v2 CI license and
+short-lived presigned runner URLs, verifies the runner bundle, runs the
+verifier, and posts a GitHub check run from the signed receipt.
 
 ## Caller contract
 
@@ -24,9 +24,9 @@ jobs:
       base_sha: ${{ github.event.merge_group.base_sha || github.event.pull_request.base.sha }}
       scope: ${{ github.event.merge_group.head_sha && 'merge_group' || 'pr_merge' }}
       repository_id: ${{ github.event.repository.id }}
-      runner_url: https://github.com/quantumlabssh/teraclaw-verify-action/releases/download/v0.1.1/teraclaw-verify-linux-x86_64.tar.gz
       runner_sha256: <published sha256>
-      runner_bundle_url: https://github.com/quantumlabssh/teraclaw-verify-action/releases/download/v0.1.1/teraclaw-verify-linux-x86_64.tar.gz.sigstore.json
+      runner_arch: x86_64
+      runner_download_host: <account>.r2.cloudflarestorage.com
       runner_source_commit: <private repo commit recorded at release>
       runner_signer_workflow: quantumlabssh/teraclaw/.github/workflows/release-verify-runner.yml@<full release ref, e.g. refs/heads/main or refs/tags/v0.9.16>
       runner_source_repository_id: <private repo numeric id>
@@ -47,6 +47,9 @@ bound to the account, and can be revoked without rotating the runner.
   verifier requires the certificate `job_workflow_sha`, not just the tag.
 - The runner tarball is hash-checked and its Sigstore bundle is verified before
   execution. A wrong hash or an unexpected signer refuses to run.
+- The runner and bundle are served from a private bucket through short-lived
+  presigned URLs returned by the license exchange. The workflow pins the
+  download host, refuses redirects, and never uses a public GitHub release.
 - The `license:ci` key is exchanged for a signed `kind: ci` document bound to
   the caller's numeric `repository_id`. A missing, expired, revoked, or
   wrong-repository license posts `action_required` and fails the job.

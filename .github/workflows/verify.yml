@@ -28,13 +28,14 @@ on:
       repository_id:
         required: true
         type: number
-      runner_url:
-        required: true
-        type: string
       runner_sha256:
         required: true
         type: string
-      runner_bundle_url:
+      runner_arch:
+        required: false
+        type: string
+        default: x86_64
+      runner_download_host:
         required: true
         type: string
       runner_source_commit:
@@ -75,9 +76,9 @@ jobs:
       BASE_SHA: ${{ inputs.base_sha }}
       SCOPE: ${{ inputs.scope }}
       REPOSITORY_ID: ${{ inputs.repository_id }}
-      RUNNER_URL: ${{ inputs.runner_url }}
       RUNNER_SHA256: ${{ inputs.runner_sha256 }}
-      RUNNER_BUNDLE_URL: ${{ inputs.runner_bundle_url }}
+      RUNNER_ARCH: ${{ inputs.runner_arch }}
+      RUNNER_DOWNLOAD_HOST: ${{ inputs.runner_download_host }}
       RUNNER_SOURCE_COMMIT: ${{ inputs.runner_source_commit }}
       RUNNER_SIGNER_WORKFLOW: ${{ inputs.runner_signer_workflow }}
       RUNNER_SOURCE_REPOSITORY_ID: ${{ inputs.runner_source_repository_id }}
@@ -106,21 +107,26 @@ jobs:
           exit 1
 
       - name: Exchange the CI key for a signed license
+        id: license
         if: env.LICENSE_CI_KEY != ''
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
+          if ! printf '%s' "$RUNNER_SHA256" | grep -Eq '^[0-9a-fA-F]{64}$'; then
+            echo "runner_sha256 must be 64 hex characters" >&2
+            exit 1
+          fi
           set +e
-          http_code=$(curl -sS -o license.json -w '%{http_code}' \
+          http_code=$(curl -sS -o response.json -w '%{http_code}' \
             -X POST "$TERACLAW_LICENSE_URL" \
             -H "Authorization: Bearer $LICENSE_CI_KEY" \
             -H "content-type: application/json" \
-            --data "{\"repository_id\": $REPOSITORY_ID}")
+            --data "{\"repository_id\": $REPOSITORY_ID, \"runner_sha256\": \"$RUNNER_SHA256\", \"arch\": \"$RUNNER_ARCH\"}")
           curl_code=$?
           set -e
           if [ "$curl_code" -ne 0 ] || [ "$http_code" -ne 200 ]; then
             echo "license exchange failed (curl=$curl_code http=$http_code)"
-            cat license.json 2>/dev/null || true
+            cat response.json 2>/dev/null || true
             python .teraclaw-verify-action/post_check.py \
               --head-sha "$HEAD_SHA" \
               --conclusion action_required \
@@ -128,6 +134,22 @@ jobs:
               --summary "TeraClaw CI license invalid or missing (HTTP $http_code)"
             exit 1
           fi
+          if ! jq -e '.license and .runner.url and .runner.bundle_url' response.json >/dev/null; then
+            echo "license response is incomplete" >&2
+            exit 1
+          fi
+          runner_url=$(jq -r '.runner.url' response.json)
+          bundle_url=$(jq -r '.runner.bundle_url' response.json)
+          for url in "$runner_url" "$bundle_url"; do
+            host=$(python -c 'import sys, urllib.parse; print(urllib.parse.urlparse(sys.argv[1]).hostname or "")' "$url")
+            if [ "$host" != "$RUNNER_DOWNLOAD_HOST" ]; then
+              echo "runner URL host $host is not pinned host $RUNNER_DOWNLOAD_HOST" >&2
+              exit 1
+            fi
+          done
+          jq -r '.license' response.json > license.json
+          echo "runner_url=$runner_url" >> "$GITHUB_OUTPUT"
+          echo "bundle_url=$bundle_url" >> "$GITHUB_OUTPUT"
 
       - name: Check out the code under test
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -138,6 +160,9 @@ jobs:
           persist-credentials: false
 
       - name: Download, hash-check, and verify the runner
+        env:
+          RUNNER_URL: ${{ steps.license.outputs.runner_url }}
+          RUNNER_BUNDLE_URL: ${{ steps.license.outputs.bundle_url }}
         run: |
           curl --proto '=https' --tlsv1.2 --max-redirs 0 -fsSL "$RUNNER_URL" -o runner.tar.gz
           echo "$RUNNER_SHA256  runner.tar.gz" | sha256sum -c -
