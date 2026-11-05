@@ -25,9 +25,9 @@ jobs:
       base_sha: ${{ github.event.merge_group.base_sha || github.event.pull_request.base.sha }}
       scope: ${{ github.event.merge_group.head_sha && 'merge_group' || 'pr_merge' }}
       repository_id: ${{ github.event.repository.id }}
-      runner_url: https://releases.teraclaw.org/verify/teraclaw-verify-linux-x86_64.tar.gz
+      runner_url: https://github.com/quantumlabssh/teraclaw-verify-action/releases/download/v0.1.1/teraclaw-verify-linux-x86_64.tar.gz
       runner_sha256: <published sha256>
-      runner_bundle_url: https://releases.teraclaw.org/verify/teraclaw-verify-linux-x86_64.tar.gz.sigstore.json
+      runner_bundle_url: https://github.com/quantumlabssh/teraclaw-verify-action/releases/download/v0.1.1/teraclaw-verify-linux-x86_64.tar.gz.sigstore.json
       runner_source_commit: <private repo commit recorded at release>
       runner_signer_workflow: quantumlabssh/teraclaw/.github/workflows/release-verify-runner.yml
       runner_source_repository_id: <private repo numeric id>
