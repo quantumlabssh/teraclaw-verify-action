@@ -22,7 +22,7 @@ jobs:
     with:
       head_sha: ${{ github.event.merge_group.head_sha || github.sha }}
       base_ref: ${{ github.event.merge_group.base_ref || format('refs/heads/{0}', github.event.pull_request.base.ref) }}
-      base_sha: ${{ github.event.merge_group.base_sha }}
+      base_sha: ${{ github.event.merge_group.base_sha || github.event.pull_request.base.sha }}
       scope: ${{ github.event.merge_group.head_sha && 'merge_group' || 'pr_merge' }}
       repository_id: ${{ github.event.repository.id }}
       runner_url: https://releases.teraclaw.org/verify/teraclaw-verify-linux-x86_64.tar.gz

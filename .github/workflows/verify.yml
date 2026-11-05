@@ -160,6 +160,8 @@ jobs:
         continue-on-error: true
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          TERACLAW_DATA_DIR: ${{ github.workspace }}/.teraclaw-run
+          TERACLAW_INSTANCE_KEY_PATH: ${{ github.workspace }}/.teraclaw-run/instance_key
         run: |
           set +e
           ./runner/teraclaw-verify run \
