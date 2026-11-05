@@ -60,7 +60,6 @@ on:
 permissions:
   contents: read
   checks: write
-  id-token: write
 
 env:
   ACTION_REPO: quantumlabssh/teraclaw-verify-action
@@ -140,9 +139,9 @@ jobs:
 
       - name: Download, hash-check, and verify the runner
         run: |
-          curl -fsSL "$RUNNER_URL" -o runner.tar.gz
+          curl --proto '=https' --tlsv1.2 --max-redirs 0 -fsSL "$RUNNER_URL" -o runner.tar.gz
           echo "$RUNNER_SHA256  runner.tar.gz" | sha256sum -c -
-          curl -fsSL "$RUNNER_BUNDLE_URL" -o runner.sigstore.json
+          curl --proto '=https' --tlsv1.2 --max-redirs 0 -fsSL "$RUNNER_BUNDLE_URL" -o runner.sigstore.json
           python -m pip install --quiet 'sigstore==4.5.1'
           python .teraclaw-verify-action/verify_runner_bundle.py \
             --file runner.tar.gz \

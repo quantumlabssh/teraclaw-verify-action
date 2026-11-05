@@ -17,7 +17,6 @@ jobs:
     permissions:
       contents: read
       checks: write
-      id-token: write
     uses: quantumlabssh/teraclaw-verify-action/.github/workflows/verify.yml@v0.1.1
     with:
       head_sha: ${{ github.event.merge_group.head_sha || github.sha }}
