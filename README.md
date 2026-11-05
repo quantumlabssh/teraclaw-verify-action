@@ -29,7 +29,7 @@ jobs:
       runner_sha256: <published sha256>
       runner_bundle_url: https://github.com/quantumlabssh/teraclaw-verify-action/releases/download/v0.1.1/teraclaw-verify-linux-x86_64.tar.gz.sigstore.json
       runner_source_commit: <private repo commit recorded at release>
-      runner_signer_workflow: quantumlabssh/teraclaw/.github/workflows/release-verify-runner.yml
+      runner_signer_workflow: quantumlabssh/teraclaw/.github/workflows/release-verify-runner.yml@<full release ref, e.g. refs/heads/main or refs/tags/v0.9.16>
       runner_source_repository_id: <private repo numeric id>
       workflow_tag: v0.1.1
     secrets:
