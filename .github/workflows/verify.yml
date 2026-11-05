@@ -96,14 +96,8 @@ jobs:
 
       - name: Require a CI license key
         if: env.LICENSE_CI_KEY == ''
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
         run: |
-          python .teraclaw-verify-action/post_check.py \
-            --head-sha "$HEAD_SHA" \
-            --conclusion action_required \
-            --title "TeraClaw verify" \
-            --summary "TeraClaw CI license key is missing"
+          echo "::error::TeraClaw CI license key is missing"
           exit 1
 
       - name: Exchange the CI key for a signed license
@@ -127,11 +121,6 @@ jobs:
           if [ "$curl_code" -ne 0 ] || [ "$http_code" -ne 200 ]; then
             echo "license exchange failed (curl=$curl_code http=$http_code)"
             cat response.json 2>/dev/null || true
-            python .teraclaw-verify-action/post_check.py \
-              --head-sha "$HEAD_SHA" \
-              --conclusion action_required \
-              --title "TeraClaw verify" \
-              --summary "TeraClaw CI license invalid or missing (HTTP $http_code)"
             exit 1
           fi
           if ! jq -e '.license and .runner.url and .runner.bundle_url' response.json >/dev/null; then
@@ -141,9 +130,12 @@ jobs:
           runner_url=$(jq -r '.runner.url' response.json)
           bundle_url=$(jq -r '.runner.bundle_url' response.json)
           for url in "$runner_url" "$bundle_url"; do
+            scheme=$(python -c 'import sys, urllib.parse; print(urllib.parse.urlparse(sys.argv[1]).scheme or "")' "$url")
             host=$(python -c 'import sys, urllib.parse; print(urllib.parse.urlparse(sys.argv[1]).hostname or "")' "$url")
-            if [ "$host" != "$RUNNER_DOWNLOAD_HOST" ]; then
-              echo "runner URL host $host is not pinned host $RUNNER_DOWNLOAD_HOST" >&2
+            port=$(python -c 'import sys, urllib.parse; print(urllib.parse.urlparse(sys.argv[1]).port or "")' "$url")
+            if [ "$scheme" != "https" ] || [ "$host" != "$RUNNER_DOWNLOAD_HOST" ] || \
+               { [ -n "$port" ] && [ "$port" != "443" ]; }; then
+              echo "runner URL $url is not HTTPS on pinned host $RUNNER_DOWNLOAD_HOST" >&2
               exit 1
             fi
           done
@@ -232,3 +224,14 @@ jobs:
             exit_code=1
           fi
           exit "$exit_code"
+
+      - name: Post a setup-failure check
+        if: failure() && steps.verify.outcome == 'skipped'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python .teraclaw-verify-action/post_check.py \
+            --head-sha "$HEAD_SHA" \
+            --conclusion action_required \
+            --title "TeraClaw verify" \
+            --summary "TeraClaw verify setup failed (license, runner, checkout, or download)"
