@@ -1,9 +1,9 @@
 name: TeraClaw verify action
 
 # Reusable Level 2 runner. The caller repo supplies the tested SHA, base ref,
-# numeric repository id, pinned runner URL/hash, and the license token secret.
-# Keep this file short: all logic lives in the signed runner it downloads and
-# hash-checks.
+# numeric repository id, pinned runner URL/hash, and a dashboard `license:ci`
+# key. The action exchanges that key for a short-lived signed v2 CI license on
+# every run, then verifies it offline in the runner.
 #
 # The OIDC certificate's job_workflow_ref is this repo at the pinned tag, and
 # job_workflow_sha is this workflow commit. Receipt verification pins both, the
@@ -54,13 +54,17 @@ on:
         required: true
         type: string
     secrets:
-      TERACLAW_LICENSE_TOKEN:
+      TERACLAW_LICENSE_CI_KEY:
         required: true
 
 permissions:
   contents: read
   checks: write
   id-token: write
+
+env:
+  ACTION_REPO: quantumlabssh/teraclaw-verify-action
+  TERACLAW_LICENSE_URL: https://teraclaw.org/api/license/ci
 
 jobs:
   verify:
@@ -80,37 +84,67 @@ jobs:
       RUNNER_SOURCE_REPOSITORY_ID: ${{ inputs.runner_source_repository_id }}
       RUNNER_SOURCE_REPOSITORY: ${{ inputs.runner_source_repository }}
       WORKFLOW_TAG: ${{ inputs.workflow_tag }}
-      LICENSE_TOKEN: ${{ secrets.TERACLAW_LICENSE_TOKEN }}
+      LICENSE_CI_KEY: ${{ secrets.TERACLAW_LICENSE_CI_KEY }}
     steps:
-      - name: Require license
-        if: env.LICENSE_TOKEN == ''
+      - name: Check out the verify action
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: ${{ env.ACTION_REPO }}
+          ref: ${{ env.WORKFLOW_TAG }}
+          path: .teraclaw-verify-action
+          persist-credentials: false
+
+      - name: Require a CI license key
+        if: env.LICENSE_CI_KEY == ''
         env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
-          jq -n --arg sha "$HEAD_SHA" \
-            '{name:"TeraClaw merge queue",head_sha:$sha,status:"completed",conclusion:"action_required",output:{title:"TeraClaw merge queue",summary:"TeraClaw license invalid or missing"}}' \
-            | gh api "repos/$REPO/check-runs" --method POST --input -
-          # Posting the check is not enough: a green job would let the merge
-          # queue treat a missing license as a pass (R-06).
+          python .teraclaw-verify-action/post_check.py \
+            --head-sha "$HEAD_SHA" \
+            --conclusion action_required \
+            --title "TeraClaw verify" \
+            --summary "TeraClaw CI license key is missing"
           exit 1
 
+      - name: Exchange the CI key for a signed license
+        if: env.LICENSE_CI_KEY != ''
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          http_code=$(curl -sS -o license.json -w '%{http_code}' \
+            -X POST "$TERACLAW_LICENSE_URL" \
+            -H "Authorization: Bearer $LICENSE_CI_KEY" \
+            -H "content-type: application/json" \
+            --data "{\"repository_id\": $REPOSITORY_ID}")
+          curl_code=$?
+          set -e
+          if [ "$curl_code" -ne 0 ] || [ "$http_code" -ne 200 ]; then
+            echo "license exchange failed (curl=$curl_code http=$http_code)"
+            cat license.json 2>/dev/null || true
+            python .teraclaw-verify-action/post_check.py \
+              --head-sha "$HEAD_SHA" \
+              --conclusion action_required \
+              --title "TeraClaw verify" \
+              --summary "TeraClaw CI license invalid or missing (HTTP $http_code)"
+            exit 1
+          fi
+
       - name: Check out the code under test
-        if: env.LICENSE_TOKEN != ''
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           ref: ${{ env.HEAD_SHA }}
           fetch-depth: 0
+          path: repo
           persist-credentials: false
 
       - name: Download, hash-check, and verify the runner
-        if: env.LICENSE_TOKEN != ''
         run: |
           curl -fsSL "$RUNNER_URL" -o runner.tar.gz
           echo "$RUNNER_SHA256  runner.tar.gz" | sha256sum -c -
           curl -fsSL "$RUNNER_BUNDLE_URL" -o runner.sigstore.json
           python -m pip install --quiet 'sigstore==4.5.1'
-          python verify_runner_bundle.py \
+          python .teraclaw-verify-action/verify_runner_bundle.py \
             --file runner.tar.gz \
             --bundle runner.sigstore.json \
             --expected-sha256 "$RUNNER_SHA256" \
@@ -122,15 +156,53 @@ jobs:
           tar -xzf runner.tar.gz -C runner
 
       - name: Run the verifier
-        if: env.LICENSE_TOKEN != ''
+        id: verify
+        continue-on-error: true
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
-          ./runner/teraclaw-verify \
+          set +e
+          ./runner/teraclaw-verify run \
+            --repo repo \
             --head-sha "$HEAD_SHA" \
             --base-ref "$BASE_REF" \
             --base-sha "$BASE_SHA" \
             --scope "$SCOPE" \
+            --repository "$GITHUB_REPOSITORY" \
             --repository-id "$REPOSITORY_ID" \
             --workflow-tag "$WORKFLOW_TAG" \
-            --license-token "$LICENSE_TOKEN"
+            --license-file license.json \
+            --check-out check.json \
+            --out receipt.json
+          verify_code=$?
+          echo "exit_code=$verify_code" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Upload the receipt
+        if: always() && steps.verify.outcome != 'skipped'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: teraclaw-receipt
+          path: |
+            receipt.json
+            check.json
+          if-no-files-found: ignore
+
+      - name: Post the check run
+        if: always() && steps.verify.outcome != 'skipped'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          exit_code="${{ steps.verify.outputs.exit_code }}"
+          if [ -z "$exit_code" ]; then exit_code=1; fi
+          if [ -f check.json ]; then
+            python .teraclaw-verify-action/post_check.py --file check.json
+          else
+            python .teraclaw-verify-action/post_check.py \
+              --head-sha "$HEAD_SHA" \
+              --conclusion action_required \
+              --title "TeraClaw verify" \
+              --summary "TeraClaw verifier did not produce a signed receipt"
+            exit_code=1
+          fi
+          exit "$exit_code"
