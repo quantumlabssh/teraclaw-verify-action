@@ -35,6 +35,13 @@ def _extension_text(certificate, oid: str) -> str:
         return ""
 
 
+def _workflow_ref(value: str) -> str:
+    """Fulcio writes the absolute URL form; accept the short owner/repo form too."""
+    value = value.strip()
+    prefix = "https://github.com/"
+    return value[len(prefix) :] if value.startswith(prefix) else value
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--file", required=True)
@@ -90,7 +97,7 @@ def main(argv: list[str] | None = None) -> int:
 
     cert = bundle.signing_certificate
     signer = _extension_text(cert, "1.3.6.1.4.1.57264.1.9")
-    if signer and signer != args.signer_workflow:
+    if signer and _workflow_ref(signer) != _workflow_ref(args.signer_workflow):
         print(f"signer workflow mismatch: {signer}", file=sys.stderr)
         return 1
 
