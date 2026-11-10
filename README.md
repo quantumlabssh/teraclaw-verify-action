@@ -1,5 +1,12 @@
 # TeraClaw verify action
 
+> **Not released for production.** The only published tag is `v0.1.0`, and it
+> is a **staging** identity. `v0.1.1` does not exist yet. Do not point a
+> production branch-protection check at this action until the hardening branch
+> is merged, a runner for the release commit is downloadable through the licence
+> gate, the identity is flipped to production, and the tag is created once.
+> Tags are immutable under the repository ruleset.
+
 Public reusable Level 2 runner for TeraClaw merge-queue receipts.
 
 This repository is intentionally small. The caller supplies the pinned runner
@@ -8,7 +15,7 @@ dashboard key. Each run exchanges the key for a fresh signed v2 CI license and
 short-lived presigned runner URLs, verifies the runner bundle, runs the
 verifier, and posts a GitHub check run from the signed receipt.
 
-## Caller contract
+## Caller contract (staging only)
 
 ```yaml
 jobs:
@@ -17,7 +24,7 @@ jobs:
     permissions:
       contents: read
       checks: write
-    uses: quantumlabssh/teraclaw-verify-action/.github/workflows/verify.yml@v0.1.1
+    uses: quantumlabssh/teraclaw-verify-action/.github/workflows/verify.yml@v0.1.0
     with:
       head_sha: ${{ github.event.merge_group.head_sha || github.sha }}
       base_ref: ${{ github.event.merge_group.base_ref || format('refs/heads/{0}', github.event.pull_request.base.ref) }}
@@ -30,7 +37,7 @@ jobs:
       runner_source_commit: <private repo commit recorded at release>
       runner_signer_workflow: quantumlabssh/teraclaw/.github/workflows/release-verify-runner.yml@<full release ref, e.g. refs/heads/main or refs/tags/v0.9.16>
       runner_source_repository_id: <private repo numeric id>
-      workflow_tag: v0.1.1
+      workflow_tag: v0.1.0
     secrets:
       TERACLAW_LICENSE_CI_KEY: ${{ secrets.TERACLAW_LICENSE_CI_KEY }}
 ```
@@ -59,14 +66,22 @@ bound to the account, and can be revoked without rotating the runner.
 - The action does not cache a license across runs. A teraclaw.org outage fails
   the run instead of reusing an old document.
 
-## Staging
+## Staging — not released
 
-`quantumlabssh/teraclaw-verify-action` is the current production identity in
-the private engine's `verify_action_identities.json`. The entry must name the
-tag, the exact workflow commit, `environment: production`, and `status:
-active`. A `staging` entry is refused by production receipt verification.
+`quantumlabssh/teraclaw-verify-action` has **no production identity** yet. The
+only tag is `v0.1.0`, and its entry in the private engine's
+`verify_action_identities.json` is `environment: staging`. Production receipt
+verification refuses it. Do not use it as a required check.
 
-After the signed runner release, append the emitted
-`runner-signer-*.json` record to the engine's `runner_signers` list and pin
-the source commit + SHA-256. Do not accept an arbitrary `v*` tag without a
-matching signer record.
+Release order (owner-controlled):
+
+1. Merge the hardening branch.
+2. Build and sign a runner for the release commit; make it downloadable through
+   the licence gate.
+3. Append the emitted `runner-signer-*.json` to the engine's `runner_signers`
+   list and pin the source commit + SHA-256.
+4. Update the identity to the exact workflow commit and `environment:
+   production`.
+5. Create `v0.1.1` **once**, after all of the above. Never move or delete it.
+
+Do not accept an arbitrary `v*` tag without a matching signer record.
