@@ -17,6 +17,10 @@ verifier, and posts a GitHub check run from the signed receipt.
 
 ## Caller contract (staging only)
 
+> Do **not** pin `v0.1.0` in a production branch-protection check. Use the
+> release tag that exists after the hardened workflow has one real
+> end-to-end run; this example uses a placeholder until then.
+
 ```yaml
 jobs:
   verify:
@@ -24,7 +28,7 @@ jobs:
     permissions:
       contents: read
       checks: write
-    uses: quantumlabssh/teraclaw-verify-action/.github/workflows/verify.yml@v0.1.0
+    uses: quantumlabssh/teraclaw-verify-action/.github/workflows/verify.yml@<release tag, e.g. v0.1.1>
     with:
       head_sha: ${{ github.event.merge_group.head_sha || github.sha }}
       base_ref: ${{ github.event.merge_group.base_ref || format('refs/heads/{0}', github.event.pull_request.base.ref) }}
@@ -37,7 +41,7 @@ jobs:
       runner_source_commit: <private repo commit recorded at release>
       runner_signer_workflow: quantumlabssh/teraclaw/.github/workflows/release-verify-runner.yml@<full release ref, e.g. refs/heads/main or refs/tags/v0.9.16>
       runner_source_repository_id: <private repo numeric id>
-      workflow_tag: v0.1.0
+      workflow_tag: <release tag, e.g. v0.1.1>
     secrets:
       TERACLAW_LICENSE_CI_KEY: ${{ secrets.TERACLAW_LICENSE_CI_KEY }}
 ```
