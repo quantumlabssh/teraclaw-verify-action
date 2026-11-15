@@ -52,6 +52,11 @@ bound to the account, and can be revoked without rotating the runner.
   organization/enterprise with access granted.
 - Pin the caller to a tag and publish the workflow commit for that tag. The
   verifier requires the certificate `job_workflow_sha`, not just the tag.
+  `workflow_tag` is a caller input; it is not the trust anchor, so never point
+  a caller at `@main`.
+- The `license:ci` key is exposed only to the exchange step. The verifier
+  process receives the resulting signed license file, never the key or the
+  GitHub token.
 - The runner tarball is hash-checked and its Sigstore bundle is verified before
   execution. A wrong hash or an unexpected signer refuses to run.
 - The runner and bundle are served from a private bucket through short-lived
