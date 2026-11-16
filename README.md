@@ -10,10 +10,11 @@
 Public reusable Level 2 runner for TeraClaw merge-queue receipts.
 
 This repository is intentionally small. The caller supplies the pinned runner
-SHA-256, architecture, signer identity, download host, and a `license:ci`
+SHA-256, architecture, signer identity, R2 download host, and a `license:ci`
 dashboard key. Each run exchanges the key for a fresh signed v2 CI license and
 short-lived presigned runner URLs, verifies the runner bundle, runs the
-verifier, and posts a GitHub check run from the signed receipt.
+verifier **in a job with no GitHub token and no `checks: write`**, then verifies
+the signed receipt in a second job and posts the GitHub check from that receipt.
 
 ## Caller contract (staging only)
 
@@ -59,19 +60,25 @@ bound to the account, and can be revoked without rotating the runner.
   `workflow_tag` is a caller input; it is not the trust anchor, so never point
   a caller at `@main`.
 - The `license:ci` key is exposed only to the exchange step. The verifier
-  process receives the resulting signed license file, never the key or the
-  GitHub token.
+  process receives the resulting signed license file and never the key or the
+  GitHub token. The verifier job has `contents: read` only; `checks: write`
+  lives in the post-check job.
 - The runner tarball is hash-checked and its Sigstore bundle is verified before
   execution. A wrong hash or an unexpected signer refuses to run.
 - The runner and bundle are served from a private bucket through short-lived
-  presigned URLs returned by the license exchange. The workflow pins the
-  download host, refuses redirects, and never uses a public GitHub release.
+  presigned URLs returned by the license exchange. The download host must end
+  in `.r2.cloudflarestorage.com`; the release replaces that suffix check with
+  the exact account host. Redirects are refused.
 - The `license:ci` key is exchanged for a signed `kind: ci` document bound to
   the caller's numeric `repository_id`. A missing, expired, revoked, or
   wrong-repository license posts `action_required` and fails the job.
-- The check run is built from the signed receipt. Only `verified` is `success`;
-  `weak`, `capped`, and `accepted` are `action_required`; `failed` is
-  `failure`. A missing receipt is `action_required`, never `neutral`.
+- The check run is built from the signed receipt, not from a workspace file.
+  `post-check` verifies the DSSE signature and the in-toto types, requires the
+  receipt subject `gitCommit` to equal the event's head SHA, and derives the
+  conclusion from `predicate.assurance`. Only `verified` is `success`; `weak`,
+  `capped`, and `accepted` are `action_required`; `failed` is `failure`. A
+  missing receipt is `action_required`, never `neutral`. A workspace
+  `check.json` is ignored.
 - The action does not cache a license across runs. A teraclaw.org outage fails
   the run instead of reusing an old document.
 

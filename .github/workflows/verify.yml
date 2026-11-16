@@ -1,9 +1,17 @@
 name: TeraClaw verify action
 
 # Reusable Level 2 runner. The caller repo supplies the tested SHA, base ref,
-# numeric repository id, pinned runner URL/hash, and a dashboard `license:ci`
-# key. The action exchanges that key for a short-lived signed v2 CI license on
-# every run, then verifies it offline in the runner.
+# numeric repository id, pinned runner hash/signer identity, and a dashboard
+# `license:ci` key. The action exchanges that key for a short-lived signed v2 CI
+# license on every run, verifies the pinned runner, and signs a receipt.
+#
+# Two jobs keep the write token away from the verifier:
+#   verify      - no checks:write, no GitHub token in the verifier; uploads the
+#                 signed receipt as an artifact.
+#   post-check  - downloads the receipt, verifies the DSSE envelope, requires the
+#                 subject commit to equal the event head SHA, and derives the
+#                 check conclusion from `predicate.assurance`. A workspace
+#                 `check.json` is never trusted.
 #
 # The OIDC certificate's job_workflow_ref is this repo at the pinned tag, and
 # job_workflow_sha is this workflow commit. Receipt verification pins both, the
@@ -60,7 +68,6 @@ on:
 
 permissions:
   contents: read
-  checks: write
 
 env:
   ACTION_REPO: quantumlabssh/teraclaw-verify-action
@@ -111,13 +118,21 @@ jobs:
         id: license
         if: env.LICENSE_CI_KEY != ''
         env:
-          GITHUB_TOKEN: ${{ github.token }}
           LICENSE_CI_KEY: ${{ secrets.TERACLAW_LICENSE_CI_KEY }}
         run: |
           if ! printf '%s' "$RUNNER_SHA256" | grep -Eq '^[0-9a-fA-F]{64}$'; then
             echo "runner_sha256 must be 64 hex characters" >&2
             exit 1
           fi
+          # The license server controls the presigned URL. Requiring the pinned
+          # R2 host keeps a caller from widening it to an arbitrary origin.
+          case "$RUNNER_DOWNLOAD_HOST" in
+            *.r2.cloudflarestorage.com) ;;
+            *)
+              echo "runner_download_host must be an R2 storage host" >&2
+              exit 1
+              ;;
+          esac
           set +e
           http_code=$(curl -sS -o response.json -w '%{http_code}' \
             -X POST "$TERACLAW_LICENSE_URL" \
@@ -180,12 +195,12 @@ jobs:
           tar -xzf runner.tar.gz -C runner
 
       - name: Run the verifier
-        id: verify
         continue-on-error: true
         env:
-          GITHUB_TOKEN: ${{ github.token }}
-          TERACLAW_DATA_DIR: ${{ github.workspace }}/.teraclaw-run
-          TERACLAW_INSTANCE_KEY_PATH: ${{ github.workspace }}/.teraclaw-run/instance_key
+          # No GitHub token and no license key: the verifier only needs the
+          # signed license file, and tested code must not see a write token.
+          TERACLAW_DATA_DIR: ${{ runner.temp }}/teraclaw-run
+          TERACLAW_INSTANCE_KEY_PATH: ${{ runner.temp }}/teraclaw-run/instance_key
         run: |
           set +e
           ./runner/teraclaw-verify run \
@@ -198,48 +213,81 @@ jobs:
             --repository-id "$REPOSITORY_ID" \
             --workflow-tag "$WORKFLOW_TAG" \
             --license-file license.json \
-            --check-out check.json \
-            --out receipt.json
-          verify_code=$?
-          echo "exit_code=$verify_code" >> "$GITHUB_OUTPUT"
+            --out "$RUNNER_TEMP/teraclaw-receipt/receipt.json"
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
           exit 0
 
       - name: Upload the receipt
-        if: always() && steps.verify.outcome != 'skipped'
+        if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: teraclaw-receipt
-          path: |
-            receipt.json
-            check.json
+          path: ${{ runner.temp }}/teraclaw-receipt/receipt.json
           if-no-files-found: ignore
+          retention-days: 7
 
-      - name: Post the check run
-        if: always() && steps.verify.outcome != 'skipped'
+  post-check:
+    needs: verify
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      checks: write
+    env:
+      HEAD_SHA: ${{ inputs.head_sha }}
+      REPOSITORY_ID: ${{ inputs.repository_id }}
+      WORKFLOW_TAG: ${{ inputs.workflow_tag }}
+    steps:
+      - name: Check out the verify action
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: ${{ env.ACTION_REPO }}
+          ref: ${{ env.WORKFLOW_TAG }}
+          path: .teraclaw-verify-action
+          persist-credentials: false
+
+      - name: Download the receipt
+        if: needs.verify.result == 'success'
+        # A verifier that crashed before writing a receipt leaves no artifact.
+        # Let the post step run and post action_required instead of aborting.
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: teraclaw-receipt
+          path: ${{ runner.temp }}/teraclaw-receipt
+
+      - name: Post the check from the signed receipt
+        if: needs.verify.result == 'success'
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
-          exit_code="${{ steps.verify.outputs.exit_code }}"
-          if [ -z "$exit_code" ]; then exit_code=1; fi
-          if [ -f check.json ]; then
-            python .teraclaw-verify-action/post_check.py --file check.json
-          else
-            python .teraclaw-verify-action/post_check.py \
-              --head-sha "$HEAD_SHA" \
-              --conclusion action_required \
-              --title "TeraClaw verify" \
-              --summary "TeraClaw verifier did not produce a signed receipt"
-            exit_code=1
-          fi
-          exit "$exit_code"
+          python .teraclaw-verify-action/post_check.py \
+            --receipt "$RUNNER_TEMP/teraclaw-receipt/receipt.json" \
+            --head-sha "$HEAD_SHA" \
+            --repository "$GITHUB_REPOSITORY" \
+            --repository-id "$REPOSITORY_ID"
 
       - name: Post a setup-failure check
-        if: failure() && steps.verify.outcome == 'skipped'
+        if: needs.verify.result != 'success'
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           python .teraclaw-verify-action/post_check.py \
             --head-sha "$HEAD_SHA" \
+            --repository "$GITHUB_REPOSITORY" \
+            --repository-id "$REPOSITORY_ID" \
             --conclusion action_required \
-            --title "TeraClaw verify" \
-            --summary "TeraClaw verify setup failed (license, runner, checkout, or download)"
+            --summary "TeraClaw verify setup failed or was cancelled (license, runner, checkout, or download)"
+
+      - name: Post a cancelled check
+        if: cancelled()
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python .teraclaw-verify-action/post_check.py \
+            --head-sha "$HEAD_SHA" \
+            --repository "$GITHUB_REPOSITORY" \
+            --repository-id "$REPOSITORY_ID" \
+            --conclusion action_required \
+            --summary "TeraClaw verify was cancelled"
